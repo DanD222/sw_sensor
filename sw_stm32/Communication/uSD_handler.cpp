@@ -394,7 +394,7 @@ bool read_software_update(void)
   FIL the_file;
   FRESULT fresult;
   UINT bytes_read;
-  uint32_t flash_address = 0x60000;
+  uint32_t flash_address = 0x80000;
   unsigned status;
   bool last_block_read = false;
 
@@ -444,15 +444,15 @@ bool read_software_update(void)
   pEraseInit.TypeErase = FLASH_TYPEERASE_SECTORS;
   pEraseInit.NbSectors = 1;
   pEraseInit.VoltageRange = VOLTAGE_RANGE_3;
-  pEraseInit.Sector = FLASH_SECTOR_7;
-  status = HAL_FLASHEx_Erase (&pEraseInit, &SectorError);
-  if ((status != HAL_OK) || (SectorError != 0xffffffff))
-    return false;
   pEraseInit.Sector = FLASH_SECTOR_8;
   status = HAL_FLASHEx_Erase (&pEraseInit, &SectorError);
   if ((status != HAL_OK) || (SectorError != 0xffffffff))
     return false;
   pEraseInit.Sector = FLASH_SECTOR_9;
+  status = HAL_FLASHEx_Erase (&pEraseInit, &SectorError);
+  if ((status != HAL_OK) || (SectorError != 0xffffffff))
+    return false;
+  pEraseInit.Sector = FLASH_SECTOR_10;
   status = HAL_FLASHEx_Erase (&pEraseInit, &SectorError);
   if ((status != HAL_OK) || (SectorError != 0xffffffff))
     return false;
