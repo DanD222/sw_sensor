@@ -84,19 +84,6 @@ restart_data_acquisition: // start from the beginning with new configuration
 
   uint16_t GNSS_count = 0;
 
-#if WITH_DENSITY_DATA
-  uint16_t air_density_sensor_counter = 0;
-
-  Queue<CANpacket> air_density_sensor_Q (2);
-
-    {
-      CAN_distributor_entry cde =
-	{ 0xffff, 0x120, &air_density_sensor_Q };
-      bool result = subscribe_CAN_messages (cde);
-      ASSERT(result);
-    }
-#endif
-
   GNSS_configration_t GNSS_configuration =
       (GNSS_configration_t) round(configuration (GNSS_CONFIGURATION));
 
@@ -106,8 +93,6 @@ restart_data_acquisition: // start from the beginning with new configuration
 
   switch (GNSS_configuration)
     {
-    case GNSS_NONE:
-      break;
     case GNSS_M9N:
       {
 	Task usart3_task (USART_3_runnable, "GNSS", 256, (void *)&FALSE, STANDARD_TASK_PRIORITY+1);
@@ -163,30 +148,12 @@ restart_data_acquisition: // start from the beginning with new configuration
   communicator_task.set_priority( COMMUNICATOR_PRIORITY); // lift priority
 
   compass_ground_calibration_t compass_ground_calibration;
-  unsigned magnetic_ground_calibrator_countdown = 100 * 60 * 2; // 2 minutes
   unsigned GNSS_watchdog = 0;
 
   // this is the MAIN data acquisition and processing loop
   while (true)
     {
       notify_take (true); // wait for synchronization by IMU @ 100 Hz
-
-      // if we are in magnetic calibration mode:
-      // do this here as a side-job and switch off it's flag at the end
-      if( magnetic_gound_calibration && (magnetic_ground_calibrator_countdown > 0))
-	{
-	  --magnetic_ground_calibrator_countdown;
-	  compass_ground_calibration.feed(output_data.m.mag);
-	  if( 0 == magnetic_ground_calibrator_countdown)
-	    {
-	      compass_calibration_t <int64_t, float> new_calibration;
-	      compass_ground_calibration.get_calibration_result(new_calibration.calibration);
-	      new_calibration.calibration_done = true;
-	      new_calibration.write_into_EEPROM();
-	      magnetic_calibration_done.signal();
-	      magnetic_gound_calibration = false; // stop this procedure
-	    }
-	}
 
       if (GNSS_new_data_ready) // triggered after 75ms or 200ms, GNSS-dependent
 	{
@@ -330,32 +297,6 @@ restart_data_acquisition: // start from the beginning with new configuration
 	{
 	  count_10Hz = 0;
 	  trigger_CAN ();
-
-#if WITH_DENSITY_DATA
-	  // take care of ambient air data if sensor reports any
-	  CANpacket p;
-	  if( air_density_sensor_Q.receive( p, 0) && p.dlc == 8)
-	    {
-	      air_density_sensor_counter = 0;
-	      organizer.set_density_data(p.data_f[0], p.data_f[1]);
-	      update_system_state_set( AIR_SENSOR_AVAILABLE);
-	      output_data.m.outside_air_temperature = p.data_f[0];
-	      output_data.m.outside_air_humidity = p.data_f[1];
-	    }
-	  else
-	    {
-	      if( air_density_sensor_counter < 10)
-		  ++air_density_sensor_counter;
-	      else
-		{
-		  organizer.disregard_density_data();
-		  update_system_state_clear( AIR_SENSOR_AVAILABLE);
-		  output_data.m.outside_air_humidity = -1.0f; // means: disregard humidity and temperature
-		  output_data.m.outside_air_temperature = ZERO;
-		}
-	    }
-#endif
-
 	}
 
       organizer.report_data ( output_data);
