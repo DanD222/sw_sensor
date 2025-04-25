@@ -37,6 +37,9 @@
 #include "uSD_handler.h"
 #include "watchdog_handler.h"
 #include "magnetic_induction_report.h"
+#if ACTIVATE_MAGNETIC_3D_MECHANIM
+#include "compass_calibrator_3D.h"
+#endif
 #include "SHA256.h"
 
 ROM uint8_t SHA_INITIALIZATION[] = "presently a well-known string";
@@ -47,11 +50,8 @@ extern bool reset_by_watchdog_requested;
 
 COMMON char *crashfile;
 COMMON unsigned crashline;
-COMMON bool magnetic_gound_calibration;
 COMMON bool dump_sensor_readings;
 COMMON bool landing_detected;
-COMMON Semaphore magnetic_calibration_done;
-COMMON magnetic_induction_report_t magnetic_induction_report;
 
 FATFS fatfs;
 extern SD_HandleTypeDef hsd;
@@ -78,6 +78,44 @@ char * format_date_time( char * target)
 }
 
 extern RestrictedTask uSD_handler_task; // will come downwards ...
+
+#if ACTIVATE_MAGNETIC_3D_MECHANIM
+void read_magnetic_3D_data( void)
+{
+  FIL the_file;
+  FRESULT fresult;
+  UINT bytes_read;
+
+  // try to open mag 3D calibration file
+  fresult = f_open (&the_file, (char *)"mag_3D_data.bin", FA_READ);
+  if( fresult != FR_OK)
+    return;
+
+  unsigned size = sizeof(float) * compass_calibrator_3D_t::AXES * compass_calibrator_3D_t::PARAMETERS;
+  fresult = f_read( &the_file, mem_buffer, size, &bytes_read);
+  if( (fresult != FR_OK) || (bytes_read  != size) )
+    compass_calibrator_3D.set_current_parameters( (const float *)mem_buffer);
+
+  f_close(&the_file);
+}
+
+void write_magnetic_3D_data( void)
+{
+  const void * data = compass_calibrator_3D.get_current_parameters();
+  if( data == 0)
+    return;
+
+  FRESULT fresult;
+  FIL fp;
+  UINT writtenBytes = 0;
+  fresult = f_open (&fp, "mag_3D_data.bin", FA_CREATE_ALWAYS | FA_WRITE);
+  if (fresult != FR_OK)
+    return;
+
+  fresult = f_write (&fp, data, sizeof(float) * compass_calibrator_3D_t::AXES * compass_calibrator_3D_t::PARAMETERS, &writtenBytes);
+  f_close(&fp);
+}
+#endif
 
 //!< write crash dump file and force MPU reset via watchdog
 void write_crash_dump( void)
@@ -350,60 +388,6 @@ bool write_EEPROM_dump( const char * filename)
   return FR_OK;
 }
 
-void write_magnetic_calibration_file ( void)
-{
-  FRESULT fresult;
-  FILINFO filinfo;
-  FIL fp;
-  char buffer[100];
-  char *next = buffer;
-  int32_t writtenBytes = 0;
-
-  fresult = f_stat("magnetic", &filinfo);
-  if( (fresult != FR_OK) || ((filinfo.fattrib & AM_DIR)==0))
-    return; // directory does not exist -> do not write file
-
-  next = append_string( next, "magnetic/");
-  next = format_date_time( next);
-  append_string(next, ".mcl");
-
-  fresult = f_open (&fp, buffer, FA_CREATE_ALWAYS | FA_WRITE);
-  if (fresult != FR_OK)
-    return; // silently give up
-
-  for( unsigned i=0; i<3; ++i)
-    {
-      char *next = buffer;
-      next = my_ftoa (next, magnetic_induction_report.calibration[i].offset);
-      *next++=' ';
-      next = my_ftoa (next, magnetic_induction_report.calibration[i].scale);
-      *next++=' ';
-      next = my_ftoa (next, SQRT( magnetic_induction_report.calibration[i].variance));
-      *next++=' ';
-      fresult = f_write (&fp, buffer, next-buffer, (UINT*) &writtenBytes);
-      if( (fresult != FR_OK) || (writtenBytes != (next-buffer)))
-        return;
-    }
-
-#if USE_EARTH_INDUCTION_DATA_COLLECTOR
-  next = buffer;
-  float3vector induction = magnetic_induction_report.nav_induction;
-  for( unsigned i=0; i<3; ++i)
-    {
-      next = my_ftoa (next, induction[i]);
-      *next++=' ';
-    }
-
-  next = my_ftoa (next, magnetic_induction_report.nav_induction_std_deviation);
-  *next++='\r';
-  *next++='\n';
-
-  f_write (&fp, buffer, next-buffer, (UINT*) &writtenBytes);
-#endif
-
-  f_close(&fp);
-}
-
 //!< find software image file and load it if applicable
 bool read_software_update(void)
 {
@@ -581,10 +565,11 @@ restart:
   watchdog_activator.signal(); // now start the watchdog
 
   // read configuration file if it is present on the SD card
-  bool init_file_read = read_init_file();
+  bool init_file_read = read_init_file( "larus_sensor_config.ini");
 
-  if( ! init_file_read)
-    read_configuration_file(); // optionally: support old version
+  // if it has been used: rename it to prevent overwriting something in the future
+  if( init_file_read)
+    f_rename ("larus_sensor_config.ini", "larus_sensor_config.ini.used");
 
   ensure_EEPROM_parameter_integrity();
   setup_file_handling_completed.signal();
@@ -596,30 +581,13 @@ restart:
   UINT writtenBytes = 0;
   uint8_t *buf_ptr = mem_buffer;
 
-  fresult = f_open (&the_file, (char *)"magnetic.calibration", FA_READ);
-  if( fresult == FR_DISK_ERR)
-    goto restart;
-  magnetic_gound_calibration = (fresult == FR_OK);
-  f_close( &the_file); // as this is just a dummy file
-
   fresult = f_open (&the_file, (char *)"sensor.readings", FA_READ);
   dump_sensor_readings = (fresult == FR_OK);
   f_close( &the_file); // as this is just a dummy file
 
-  if( magnetic_gound_calibration)
-    {
-      write_EEPROM_dump( (char *)"before_calibration");
-      magnetic_calibration_done.wait();
-      write_EEPROM_dump( (char *)"after_calibration");
-      f_rename((char *)"magnetic.calibration",(char *)"magnetic.calibration.done");
-
-      while( 1)
-	{
-	notify_take (true); // wait for synchronization by crash detection
-	if( crashfile)
-	  write_crash_dump();
-	}
-    }
+#if ACTIVATE_MAGNETIC_3D_MECHANIM
+  read_magnetic_3D_data(); // read 3D data if existent
+#endif
 
   FILINFO filinfo;
   fresult = f_stat("logger", &filinfo);
@@ -704,17 +672,13 @@ restart:
 	  sync_counter = 0;
 	  f_sync (&the_file);
 
-	  if( magnetic_calibration_done.wait( 0))
-	    write_magnetic_calibration_file ();
-#if 0 // will be used for the competition version
 	  if( landing_detected)
 	    {
 	      landing_detected = false;
-	      char buffer[30];
-	      format_date_time( buffer);
-	      write_EEPROM_dump( buffer); // write into FS root
-	    }
+#if ACTIVATE_MAGNETIC_3D_MECHANIM
+	      write_magnetic_3D_data();
 #endif
+	    }
 	}
     }
 }
@@ -804,10 +768,4 @@ extern "C" void handle_watchdog_trigger( void)
   // triggger error logging
   uSD_handler_task.notify_give_from_ISR();
   amok_running_task_killer.resume_from_ISR();
-}
-
-void report_magnetic_calibration_has_changed(magnetic_induction_report_t * p_magnetic_induction_report, char)
-{
-  magnetic_induction_report = *p_magnetic_induction_report;
-  magnetic_calibration_done.signal();
 }
