@@ -137,7 +137,7 @@ GNSS_Result GNSS_type::update(const uint8_t * data)
 	coordinates.velocity[DOWN]  = pvt.velocity[DOWN]  * SCALE_MM;
 
 	coordinates.speed_motion    = pvt.gSpeed * SCALE_MM;
-	coordinates.heading_motion  = pvt.gTrack * 1e-5f;
+	coordinates.heading_motion  = pvt.gTrack * 1e-5f * M_PI / 180.0f;
 
 	GNSS_new_data_ready = true;
 
