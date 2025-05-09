@@ -79,8 +79,6 @@ void communicator_runnable (void*)
 
   organizer_t organizer;
 
-restart_data_acquisition: // start from the beginning with new configuration
-
   organizer.initialize_before_measurement();
 
   uint16_t GNSS_count = 0;
@@ -220,8 +218,11 @@ restart_data_acquisition: // start from the beginning with new configuration
 	      if( vector_average_collection.acc_observed_level.abs() < 0.001f)
 		break;
 
+	      communicator_task.set_priority( WATCHDOG_TASK_PRIORITY); // decrease priority
 	      organizer.update_sensor_orientation_data( vector_average_collection);
-	      goto restart_data_acquisition;
+	      communicator_task.set_priority( COMMUNICATOR_PRIORITY); // lift priority
+
+	      organizer.initialize_before_measurement();
 	      break;
 	    case FINE_TUNE_CALIB:
 	      vector_average_organizer.source=&(output_data.m.acc);
@@ -232,7 +233,7 @@ restart_data_acquisition: // start from the beginning with new configuration
 	      break;
 
 	    case SOME_EEPROM_VALUE_HAS_CHANGED:
-		goto restart_data_acquisition;
+	      organizer.initialize_before_measurement();
 	      break;
 
 	    case NO_COMMAND:
@@ -250,11 +251,17 @@ restart_data_acquisition: // start from the beginning with new configuration
 	    {
 	      float inverse_count = 1.0f / VECTOR_AVERAGE_COUNT;
 	      *(vector_average_organizer.destination) = vector_average_organizer.sum * inverse_count;
+
+	      // in this case we do not wait for another command but re-calculate immediately
 	      if( fine_tune_sensor_attitude)
 		{
 		  fine_tune_sensor_attitude=false;
+
+		  communicator_task.set_priority( WATCHDOG_TASK_PRIORITY); // decrease priority
 		  organizer.fine_tune_sensor_orientation( vector_average_collection);
-		  goto restart_data_acquisition;
+		  communicator_task.set_priority( COMMUNICATOR_PRIORITY); // lift priority
+
+		  organizer.initialize_before_measurement();
 		}
 	    }
 	}

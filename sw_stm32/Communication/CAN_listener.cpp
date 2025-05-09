@@ -253,7 +253,7 @@ static ROM TaskParameters_t p =
       "CAN_RX",
       256,
       0,
-      CAN_PRIORITY,
+      WATCHDOG_TASK_PRIORITY -1,
       0,
     {
       { COMMON_BLOCK, COMMON_SIZE, portMPU_REGION_READ_WRITE },
