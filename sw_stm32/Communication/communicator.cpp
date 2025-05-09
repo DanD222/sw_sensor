@@ -49,7 +49,7 @@ COMMON Semaphore setup_file_handling_completed(1,0,(char *)"SETUP");
 COMMON output_data_t __ALIGNED(1024) output_data = { 0 };
 COMMON GNSS_type GNSS (output_data.c);
 
-COMMON Queue < communicator_command_t> communicator_command_queue(1);
+COMMON Queue < communicator_command_t> communicator_command_queue(2);
 
 extern RestrictedTask NMEA_task;
 extern RestrictedTask communicator_task;
@@ -72,6 +72,7 @@ void communicator_runnable (void*)
   vector_average_collection_t vector_average_collection={0};
 
   bool have_first_GNSS_fix = false;
+  bool fine_tune_sensor_attitude = false;
 
   // wait until configuration file read if one is given
   setup_file_handling_completed.wait();
@@ -220,13 +221,20 @@ restart_data_acquisition: // start from the beginning with new configuration
 		break;
 
 	      organizer.update_sensor_orientation_data( vector_average_collection);
+	      goto restart_data_acquisition;
+	      break;
+	    case FINE_TUNE_CALIB:
+	      vector_average_organizer.source=&(output_data.m.acc);
+	      vector_average_organizer.destination=&(vector_average_collection.acc_observed_level);
+	      vector_average_organizer.destination->zero();
+	      vector_average_organizer.counter=VECTOR_AVERAGE_COUNT;
+	      fine_tune_sensor_attitude = true;
 	      break;
 
 	    case SOME_EEPROM_VALUE_HAS_CHANGED:
 		goto restart_data_acquisition;
 	      break;
 
-	    case FINE_TUNE_CALIB: // todo implement me !
 	    case NO_COMMAND:
 	      break;
 	  }
@@ -242,6 +250,12 @@ restart_data_acquisition: // start from the beginning with new configuration
 	    {
 	      float inverse_count = 1.0f / VECTOR_AVERAGE_COUNT;
 	      *(vector_average_organizer.destination) = vector_average_organizer.sum * inverse_count;
+	      if( fine_tune_sensor_attitude)
+		{
+		  fine_tune_sensor_attitude=false;
+		  organizer.fine_tune_sensor_orientation( vector_average_collection);
+		  goto restart_data_acquisition;
+		}
 	    }
 	}
 
